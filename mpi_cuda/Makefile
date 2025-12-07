@@ -27,7 +27,7 @@ run: $(TARGET)
 	bsub -n $(P) \
 	     -gpu "num=$(P):mode=exclusive_process" \
 	     -R "span[hosts=1]" \
-	     -W 02:00 \
+	     -W 00:20 \
 	     -o "mpi-cuda-$(GRID_M)-$(GRID_N)-$(P).out" \
 	     -e "mpi-cuda-$(GRID_M)-$(GRID_N)-$(P).err" \
 	     "mpirun -np $(P) ./$(TARGET) $(GRID_M) $(GRID_N)"
