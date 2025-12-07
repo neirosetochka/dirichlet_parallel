@@ -28,8 +28,8 @@ run: $(TARGET)
 	     -gpu "num=$(P):mode=exclusive_process" \
 	     -R "span[hosts=1]" \
 	     -W 02:00 \
-	     -o "mpi-cuda-$(GRID_M)-$(GRID_N)-1.out" \
-	     -e "mpi-cuda-$(GRID_M)-$(GRID_N)-1.err" \
+	     -o "mpi-cuda-$(GRID_M)-$(GRID_N)-$(P).out" \
+	     -e "mpi-cuda-$(GRID_M)-$(GRID_N)-$(P).err" \
 	     "mpirun -np $(P) ./$(TARGET) $(GRID_M) $(GRID_N)"
 
 .PHONY: all clean run
