@@ -193,7 +193,6 @@ void setup_2d_domain() {
 }
  
 void exchange_ghosts(LocalGridFunction& u) {
-    timer.start("MPI Communication");
     MPI_Request reqs[8];
     int nreq = 0;
  
@@ -211,6 +210,7 @@ void exchange_ghosts(LocalGridFunction& u) {
         send_east[i] = u(i, local_N - 1);
     }
  
+    timer.start("MPI Communication");
     if (north != MPI_PROC_NULL) {
         MPI_Isend(send_north.data(), local_N, MPI_DOUBLE, north, 0, cart_comm, &reqs[nreq++]);
         MPI_Irecv(recv_north.data(), local_N, MPI_DOUBLE, north, 1, cart_comm, &reqs[nreq++]);
@@ -229,6 +229,7 @@ void exchange_ghosts(LocalGridFunction& u) {
     }
  
     MPI_Waitall(nreq, reqs, MPI_STATUSES_IGNORE);
+    timer.stop("MPI Communication");
  
     if (north != MPI_PROC_NULL) {
         for (int j = 0; j < local_N; ++j)
@@ -246,7 +247,6 @@ void exchange_ghosts(LocalGridFunction& u) {
         for (int i = 0; i < local_M; ++i)
             u(i, local_N) = recv_east[i];
     }
-    timer.stop("MPI Communication");
 }
  
 double calcScalarProd(const LocalGridFunction& u, const LocalGridFunction& v) {
@@ -267,24 +267,21 @@ double calcScalarProd(const LocalGridFunction& u, const LocalGridFunction& v) {
 }
  
 void calcScaledAdd(const LocalGridFunction& A, const LocalGridFunction& B, double alpha, LocalGridFunction& result) {
+    timer.start("calcScaledAdd cycle");
     if (alpha == 0.0) {
-        timer.start("calcScaledAdd cycle");
         const bool resultIsA = (&A == &result);
-        if (resultIsA) return;
- 
-        for (int i = 0; i < local_M; ++i) {
-            for (int j = 0; j < local_N; ++j) {
-                result(i, j) = A(i, j);
+        if (!resultIsA) {
+            for (int i = 0; i < local_M; ++i) {
+                for (int j = 0; j < local_N; ++j) {
+                    result(i, j) = A(i, j);
+                }
             }
         }
-        timer.stop("calcScaledAdd cycle");
-        return;
-    }
- 
-    timer.start("calcScaledAdd cycle");
-    for (int i = 0; i < local_M; ++i) {
-        for (int j = 0; j < local_N; ++j) {
-            result(i, j) = A(i, j) + alpha * B(i, j);
+    } else {
+        for (int i = 0; i < local_M; ++i) {
+            for (int j = 0; j < local_N; ++j) {
+                result(i, j) = A(i, j) + alpha * B(i, j);
+            }
         }
     }
     timer.stop("calcScaledAdd cycle");
@@ -338,7 +335,7 @@ struct Coefficients {
             }
         }
         timer.stop("a, b, F calculation cycle");
-        
+
         exchange_ghosts(a);
         exchange_ghosts(b);
 

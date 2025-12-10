@@ -129,7 +129,7 @@ double calcScalarProd(const GridFunction& u, const GridFunction& v) {
     timer.start("calcScalarProd cycle");
     double sum = 0.0;
 
-    #pragma omp parallel for reduction(+:sum) schedule(static) collapse(2)
+    #pragma omp parallel for reduction(+:sum)
     for (int i = 0; i <= M; ++i) {
         for (int j = 0; j <= N; ++j) {
             sum += u(i, j) * v(i, j) * h1 * h2;
@@ -140,28 +140,25 @@ double calcScalarProd(const GridFunction& u, const GridFunction& v) {
 }
  
 void calcScaledAdd(const GridFunction& A, const GridFunction& B, double alpha, GridFunction& result) {
+    timer.start("calcScaledAdd cycle");
     if (alpha == 0.0) {
-        timer.start("calcScaledAdd cycle");
         const bool resultIsA = (&A == &result);
-        if (resultIsA) return;
- 
-        #pragma omp parallel for schedule(static) collapse(2)
-        for (int i = 0; i <= M; ++i) {
-            for (int j = 0; j <= N; ++j) {
-                result(i, j) = A(i, j);
+        if (!resultIsA) {
+            #pragma omp parallel for
+            for (int i = 0; i <= M; ++i) {
+                for (int j = 0; j <= N; ++j) {
+                    result(i, j) = A(i, j);
+                }
             }
         }
-        timer.stop("calcScaledAdd cycle");
-        return;
+    } else {
+        #pragma omp parallel for
+        for (int i = 0; i <= M; ++i) {
+            for (int j = 0; j <= N; ++j) {
+                result(i, j) = A(i, j) + alpha * B(i, j);
+            }
+        }  
     }
- 
-    timer.start("calcScaledAdd cycle");
-    #pragma omp parallel for schedule(static) collapse(2)
-    for (int i = 0; i <= M; ++i) {
-        for (int j = 0; j <= N; ++j) {
-            result(i, j) = A(i, j) + alpha * B(i, j);
-        }
-    }  
     timer.stop("calcScaledAdd cycle");
 }
  
@@ -179,7 +176,7 @@ struct Coefficients {
         double eps = max(h1, h2) * max(h1, h2);
  
         timer.start("a, b, F calculation cycle");
-        #pragma omp parallel for schedule(static) collapse(2)
+        #pragma omp parallel for
         for (int i = 0; i <= M; ++i) {
             for (int j = 0; j <= N; ++j) {
                 double x = get_x(i);
@@ -213,7 +210,7 @@ struct Coefficients {
         timer.stop("a, b, F calculation cycle");
 
         timer.start("D calculation cycle");
-        #pragma omp parallel for schedule(static) collapse(2)
+        #pragma omp parallel for
         for (int i = 0; i <= M; ++i) {
             for (int j = 0; j <= N; ++j) {
                 if (i == 0 || j == 0 || i == M || j == N) {
@@ -229,7 +226,7 @@ struct Coefficients {
  
     void applyA(GridFunction& w, GridFunction& result) const {
         timer.start("applyA cycle");
-        #pragma omp parallel for schedule(static) collapse(2)
+        #pragma omp parallel for
         for (int i = 0; i <= M; ++i) {
             for (int j = 0; j <= N; ++j) {
                 if (i == 0 || j == 0 || i == M || j == N) {
@@ -263,7 +260,7 @@ struct Solver {
 
     void calcZ(const Coefficients& coef) {
         timer.start("calcZ cycle");
-        #pragma omp parallel for schedule(static) collapse(2)
+        #pragma omp parallel for
         for (int i = 0; i <= M; ++i) {
             for (int j = 0; j <= N; ++j) {
                 z(i, j) = r(i, j) / (coef.D(i, j) + divide_eps);
@@ -311,7 +308,7 @@ struct Solver {
     void cout_discrepancy() const {
         double max_disc = 0.0;
 
-        #pragma omp parallel for reduction(max:max_disc) schedule(static) collapse(2)
+        #pragma omp parallel for reduction(max:max_disc)
         for (int i = 0; i <= M; ++i) {
             for (int j = 0; j <= N; ++j) {
                 double val = fabs(r(i, j));
@@ -326,7 +323,6 @@ struct Solver {
  
 int main(int argc, char** argv) {
   timer.start("Total time");
-  timer.start("Initialization");
   int num_threads = omp_get_max_threads();
   omp_set_num_threads(num_threads);
 
@@ -338,17 +334,12 @@ int main(int argc, char** argv) {
   printf("\n\nGrid size: M=%d, N=%d\n", M, N);
   h1 = 4.0 / M;
   h2 = 3.0 / N;
-  timer.stop("Initialization");
 
-  timer.start("Coefficients computation");
   Coefficients coef(10);
   coef.calcCoefficients();
-  timer.stop("Coefficients computation");
 
-  timer.start("Solving");
   Solver solver((M - 1) * (N - 1), 1e-20, 1e-40);
   solver.solve(coef);
-  timer.stop("Solving");
 
   timer.stop("Total time");
   timer.report();

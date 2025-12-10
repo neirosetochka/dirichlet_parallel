@@ -42,11 +42,7 @@ public:
             const string& label = kv.first;
             double local_time = kv.second;
             cout << " - " << label << ": " << local_time << "s\n";
-            if (label.find("cycle") != std::string::npos) {
-                total_cycle_time += local_time;
-            }
         }
-        cout << " - Total cycle time: " << total_cycle_time << "s\n"; 
         cout << "=========================\n\n";
     }
 };
@@ -139,24 +135,21 @@ double calcScalarProd(const GridFunction& u, const GridFunction& v) {
 }
  
 void calcScaledAdd(const GridFunction& A, const GridFunction& B, double alpha, GridFunction& result) {
+    timer.start("calcScaledAdd cycle");
     if (alpha == 0.0) {
-        timer.start("calcScaledAdd cycle");
         const bool resultIsA = (&A == &result);
-        if (resultIsA) return;
- 
-        for (int i = 0; i <= M; ++i) {
-            for (int j = 0; j <= N; ++j) {
-                result(i, j) = A(i, j);
+        if (!resultIsA) {
+            for (int i = 0; i <= M; ++i) {
+                for (int j = 0; j <= N; ++j) {
+                    result(i, j) = A(i, j);
+                }
             }
         }
-        timer.stop("calcScaledAdd cycle");
-        return;
-    }
- 
-    timer.start("calcScaledAdd cycle");
-    for (int i = 0; i <= M; ++i) {
-        for (int j = 0; j <= N; ++j) {
-            result(i, j) = A(i, j) + alpha * B(i, j);
+    } else {
+        for (int i = 0; i <= M; ++i) {
+            for (int j = 0; j <= N; ++j) {
+                result(i, j) = A(i, j) + alpha * B(i, j);
+            }
         }
     }
     timer.stop("calcScaledAdd cycle");
@@ -314,7 +307,6 @@ struct Solver {
  
 int main(int argc, char** argv) {
     timer.start("Total time");
-    timer.start("Initialization");
     if (argc >= 3) {
         M = atoi(argv[1]);
         N = atoi(argv[2]);
@@ -323,17 +315,12 @@ int main(int argc, char** argv) {
 
     h1 = 4.0 / M;
     h2 = 3.0 / N;
-    timer.stop("Initialization");
 
-    timer.start("Coefficients computation");
     Coefficients coef(10);
     coef.calcCoefficients();
-    timer.stop("Coefficients computation");
 
-    timer.start("Solving");
     Solver solver((M - 1) * (N - 1), 1e-20, 1e-40);
     solver.solve(coef);
-    timer.stop("Solving");
 
     timer.stop("Total time");
     timer.report();
