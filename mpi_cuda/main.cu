@@ -17,7 +17,8 @@ int local_M, local_N;
 int north, south, east, west;
 MPI_Comm cart_comm;
 double h1, h2;
- 
+
+
 class TimeLogger {
 private:
     std::unordered_map<std::string, double> start_times;
@@ -68,8 +69,8 @@ public:
     int total_size;
  
     LocalGridFunctionGPU(int m, int n) : ni(m), nj(n) {
-        timer.start("GPU Memory Management");
         total_size = (m + 2) * (n + 2);
+        timer.start("GPU Memory Management");
         CUDA_CHECK(cudaMalloc(&d_data, total_size * sizeof(double)));
         CUDA_CHECK(cudaMemset(d_data, 0, total_size * sizeof(double)));
         timer.stop("GPU Memory Management");
@@ -86,18 +87,18 @@ public:
  
     void copyToHost(vector<double>& host_data) const {
         host_data.resize(total_size);
-        timer.start("GPU to Host Copy");
+        timer.start("CPU/GPU exchange");
         CUDA_CHECK(cudaMemcpy(host_data.data(), d_data, total_size * sizeof(double), cudaMemcpyDeviceToHost));
-        timer.stop("GPU to Host Copy");
+        timer.stop("CPU/GPU exchange");
     }
  
     void copyFromHost(const vector<double>& host_data) {
-        timer.start("Host to GPU Copy");
+        timer.start("CPU/GPU exchange");
         CUDA_CHECK(cudaMemcpy(d_data, host_data.data(), total_size * sizeof(double), cudaMemcpyHostToDevice));
-        timer.stop("Host to GPU Copy");
+        timer.stop("CPU/GPU exchange");
     }
 };
- 
+
 void compute_2d_decomposition() {
     double min_dist = 1e10;
     px = 1;
@@ -186,12 +187,12 @@ void exchange_ghosts_gpu(LocalGridFunctionGPU& u) {
     vector<double> h_recv_north(local_N), h_recv_south(local_N);
     vector<double> h_recv_west(local_M), h_recv_east(local_M);
  
-    timer.start("GPU to Host Copy");
+    timer.start("CPU/GPU exchange");
     CUDA_CHECK(cudaMemcpy(h_send_north.data(), d_send_north, local_N * sizeof(double), cudaMemcpyDeviceToHost));
     CUDA_CHECK(cudaMemcpy(h_send_south.data(), d_send_south, local_N * sizeof(double), cudaMemcpyDeviceToHost));
     CUDA_CHECK(cudaMemcpy(h_send_west.data(), d_send_west, local_M * sizeof(double), cudaMemcpyDeviceToHost));
     CUDA_CHECK(cudaMemcpy(h_send_east.data(), d_send_east, local_M * sizeof(double), cudaMemcpyDeviceToHost));
-    timer.stop("GPU to Host Copy");
+    timer.stop("CPU/GPU exchange");
  
     MPI_Request reqs[8];
     int nreq = 0;
@@ -217,7 +218,7 @@ void exchange_ghosts_gpu(LocalGridFunctionGPU& u) {
     MPI_Waitall(nreq, reqs, MPI_STATUSES_IGNORE);
     timer.stop("MPI Communication");
  
-    timer.start("Host to GPU Copy");
+    timer.start("CPU/GPU exchange");
     if (north != MPI_PROC_NULL) {
         CUDA_CHECK(cudaMemcpy(d_recv_north, h_recv_north.data(), local_N * sizeof(double), cudaMemcpyHostToDevice));
     }
@@ -230,7 +231,7 @@ void exchange_ghosts_gpu(LocalGridFunctionGPU& u) {
     if (east != MPI_PROC_NULL) {
         CUDA_CHECK(cudaMemcpy(d_recv_east, h_recv_east.data(), local_M * sizeof(double), cudaMemcpyHostToDevice));
     }
-    timer.stop("Host to GPU Copy");
+    timer.stop("CPU/GPU exchange");
  
     timer.start("GPU Kernels");
     if (north != MPI_PROC_NULL) {
@@ -260,7 +261,8 @@ void exchange_ghosts_gpu(LocalGridFunctionGPU& u) {
     timer.stop("GPU Memory Management");
 }
  
-double calcScalarProdGPU(LocalGridFunctionGPU& u, LocalGridFunctionGPU& v, double* d_partial, double* h_partial) {
+double calcScalarProdGPU(LocalGridFunctionGPU& u, LocalGridFunctionGPU& v, double* d_partial,
+                         double* d_partial_temp, double* h_partial) {
     dim3 blockDim(16, 16);
     dim3 gridDim((local_M + blockDim.x - 1) / blockDim.x, (local_N + blockDim.y - 1) / blockDim.y);
  
@@ -268,25 +270,39 @@ double calcScalarProdGPU(LocalGridFunctionGPU& u, LocalGridFunctionGPU& v, doubl
     timer.start("GPU Kernels");
     kernel_scalar_prod<<<gridDim, blockDim>>>(u.d_data, v.d_data, d_partial, local_M, local_N, h1, h2);
     CUDA_CHECK(cudaDeviceSynchronize());
-    timer.stop("GPU Kernels");
-    timer.stop("calcScalarProd cycle");
  
     int n_elements = local_M * local_N;
+    int curN = n_elements;
+    int threads = 256;
+
+    double* src = d_partial;
+    double* dst = d_partial_temp;
     
-    timer.start("GPU to Host Copy");
-    CUDA_CHECK(cudaMemcpy(h_partial, d_partial, n_elements * sizeof(double), cudaMemcpyDeviceToHost));
-    timer.stop("GPU to Host Copy");
- 
-    double local_sum = 0.0;
-    for (int i = 0; i < n_elements; ++i) {
-        local_sum += h_partial[i];
+    while (curN > 1) {
+        int newN = (curN + 1) / 2;
+        int blocks = (newN + threads - 1) / threads;
+
+        kernel_reduce_sum<<<blocks, threads>>>(src, dst, curN);
+        CUDA_CHECK(cudaDeviceSynchronize());
+
+        curN = newN;
+
+        double* temp = src;
+        src = dst;
+        dst = temp;
     }
+    timer.stop("GPU Kernels");
+    timer.stop("calcScalarProd cycle");
+
+    double local_sum = 0.0;
+    timer.start("CPU/GPU exchange");
+    CUDA_CHECK(cudaMemcpy(&local_sum, src, sizeof(double), cudaMemcpyDeviceToHost));
+    timer.stop("CPU/GPU exchange");
  
-    timer.start("MPI Communication");
     double global_sum;
+    timer.start("MPI Communication");
     MPI_Allreduce(&local_sum, &global_sum, 1, MPI_DOUBLE, MPI_SUM, cart_comm);
     timer.stop("MPI Communication");
-    
     return global_sum;
 }
  
@@ -348,7 +364,7 @@ struct CoefficientsGPU {
     }
  
     void applyA(LocalGridFunctionGPU& w, LocalGridFunctionGPU& result) {
-        
+
         exchange_ghosts_gpu(w);
  
         dim3 blockDim(16, 16);
@@ -375,14 +391,16 @@ struct SolverGPU {
     double divide_eps;
  
     double* d_partial;
+    double* d_partial_temp; 
     double* h_partial;
  
     SolverGPU(int max_steps_val, double delta_val, double divide_eps_val = 1e-10) : 
         max_steps(max_steps_val), delta(delta_val), divide_eps(divide_eps_val),
         w(local_M, local_N), p(local_M, local_N), r(local_M, local_N), z(local_M, local_N) {
-        timer.start("GPU Memory Management");
         int n_elements = local_M * local_N;
+        timer.start("GPU Memory Management");
         CUDA_CHECK(cudaMalloc(&d_partial, n_elements * sizeof(double)));
+        CUDA_CHECK(cudaMalloc(&d_partial_temp, n_elements * sizeof(double)));
         timer.stop("GPU Memory Management");
         h_partial = new double[n_elements];
     }
@@ -390,6 +408,7 @@ struct SolverGPU {
     ~SolverGPU() {
         timer.start("GPU Memory Management");
         cudaFree(d_partial);
+        cudaFree(d_partial_temp);
         timer.stop("GPU Memory Management");
         delete[] h_partial;
     }
@@ -416,26 +435,26 @@ struct SolverGPU {
         calcScaledAddGPU(z, p, 0.0, p);
         coef.applyA(p, Ap);
  
-        double zr_scalar_prod = calcScalarProdGPU(z, r, d_partial, h_partial);
+        double zr_scalar_prod = calcScalarProdGPU(z, r, d_partial, d_partial_temp, h_partial);
         double zr_scalar_prod_prev = zr_scalar_prod;
-        double alpha = zr_scalar_prod / (calcScalarProdGPU(Ap, p, d_partial, h_partial) + divide_eps);
+        double alpha = zr_scalar_prod / (calcScalarProdGPU(Ap, p, d_partial, d_partial_temp, h_partial) + divide_eps);
  
         int k;
         for (k = 1; k < max_steps; k++) {
             calcScaledAddGPU(w, p, alpha, w);
             calcScaledAddGPU(r, Ap, -alpha, r);
-            double norm = fabs(alpha) * sqrt(calcScalarProdGPU(p, p, d_partial, h_partial));
+            double norm = fabs(alpha) * sqrt(calcScalarProdGPU(p, p, d_partial, d_partial_temp, h_partial));
             if (norm < delta) {
                 steps = k;
                 break;
             }
             calcZ(coef);
-            zr_scalar_prod = calcScalarProdGPU(z, r, d_partial, h_partial);
+            zr_scalar_prod = calcScalarProdGPU(z, r, d_partial, d_partial_temp, h_partial);
             double beta = zr_scalar_prod / (zr_scalar_prod_prev + divide_eps);
             zr_scalar_prod_prev = zr_scalar_prod;
             calcScaledAddGPU(z, p, beta, p);
             coef.applyA(p, Ap);
-            alpha = zr_scalar_prod / (calcScalarProdGPU(Ap, p, d_partial, h_partial) + divide_eps);
+            alpha = zr_scalar_prod / (calcScalarProdGPU(Ap, p, d_partial, d_partial_temp, h_partial) + divide_eps);
             if (k == max_steps - 1) {
                 steps = max_steps;
             }
@@ -466,7 +485,8 @@ struct SolverGPU {
         }
     }
 };
- 
+
+
 int main(int argc, char** argv) {
     MPI_Init(&argc, &argv);
     MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank);

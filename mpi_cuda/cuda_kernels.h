@@ -61,4 +61,5 @@ __global__ void kernel_insert_east(double* d_u, double* d_recv, int ni, int nj);
  
 __global__ void kernel_max_abs(double* d_r, double* d_partial, int ni, int nj);
 
+__global__ void kernel_reduce_sum(double* d_in, double* d_out, int N);
 #endif

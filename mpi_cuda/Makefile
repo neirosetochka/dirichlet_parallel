@@ -2,7 +2,7 @@ ARCH ?= sm_35
 HOST_COMP ?= mpicc
 NVCC = nvcc
 
-OPT_FLAGS = -O0 -g -G
+OPT_FLAGS = -O3
 
 NVCC_FLAGS = -arch=$(ARCH) $(OPT_FLAGS) -ccbin=$(HOST_COMP) --std=c++11
 
@@ -28,8 +28,8 @@ run: $(TARGET)
 	     -gpu "num=$(P):mode=exclusive_process" \
 	     -R "span[hosts=1]" \
 	     -W 00:20 \
-	     -o "mpi-cuda-$(GRID_M)-$(GRID_N)-$(P).out" \
-	     -e "mpi-cuda-$(GRID_M)-$(GRID_N)-$(P).err" \
+	     -o "logs/mpi-cuda-$(GRID_M)-$(GRID_N)-$(P).out" \
+	     -e "logs/mpi-cuda-$(GRID_M)-$(GRID_N)-$(P).err" \
 	     "mpirun -np $(P) ./$(TARGET) $(GRID_M) $(GRID_N)"
 
 .PHONY: all clean run

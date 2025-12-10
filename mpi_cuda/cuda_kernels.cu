@@ -265,3 +265,14 @@ __global__ void kernel_max_abs(double* d_r, double* d_partial, int ni, int nj) {
     int linear_idx = i * nj + j;
     d_partial[linear_idx] = fabs(d_r[idx]);
 }
+
+__global__ void kernel_reduce_sum(double* d_in, double* d_out, int N) {
+    unsigned int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    unsigned int idx = tid * 2;
+
+    if (idx + 1 < (unsigned int)N) {
+        d_out[tid] = d_in[idx] + d_in[idx + 1];
+    } else if (idx < (unsigned int)N) {
+        d_out[tid] = d_in[idx];
+    }
+}
