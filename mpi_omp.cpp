@@ -424,10 +424,9 @@ struct Solver {
     int max_steps;
     int steps;
     double delta;
-    double divide_eps;
  
-    Solver(int max_steps, double delta, double divide_eps = 1e-10) : 
-        max_steps(max_steps), delta(delta), divide_eps(divide_eps),
+    Solver(int max_steps, double delta) : 
+        max_steps(max_steps), delta(delta),
         w(local_M, local_N), p(local_M, local_N), r(local_M, local_N), z(local_M, local_N) {}
 
     void calcZ(const Coefficients& coef) {
@@ -435,7 +434,7 @@ struct Solver {
         #pragma omp parallel for
         for (int i = 0; i < local_M; ++i) {
             for (int j = 0; j < local_N; ++j) {
-                z(i, j) = r(i, j) / (coef.D(i, j) + divide_eps);
+                z(i, j) = r(i, j) / coef.D(i, j);
             }
         }
         timer.stop("calcZ cycle");
@@ -453,24 +452,24 @@ struct Solver {
  
         double zr_scalar_prod = calcScalarProd(z, r);
         double zr_scalar_prod_prev = zr_scalar_prod;
-        double alpha = zr_scalar_prod / (calcScalarProd(Ap, p) + divide_eps);
+        double alpha = zr_scalar_prod / calcScalarProd(Ap, p);
  
         int k;
         for (k = 1; k < max_steps; k++) {
             calcScaledAdd(w, p, alpha, w);
             calcScaledAdd(r, Ap, -alpha, r);
-            double norm = fabs(alpha) * sqrt(calcScalarProd(p, p));
+            double norm = sqrt(calcScalarProd(r, r));
             if (norm < delta) {
                 steps = k;
                 break;
             }
             calcZ(coef);
             zr_scalar_prod = calcScalarProd(z, r);
-            double beta = zr_scalar_prod / (zr_scalar_prod_prev + divide_eps);
+            double beta = zr_scalar_prod / zr_scalar_prod_prev;
             zr_scalar_prod_prev = zr_scalar_prod;
             calcScaledAdd(z, p, beta, p);
             coef.applyA(p, Ap);
-            alpha = zr_scalar_prod / (calcScalarProd(Ap, p) + divide_eps);
+            alpha = zr_scalar_prod / calcScalarProd(Ap, p);
             if (k == max_steps - 1) {
                 steps = max_steps;
             }
@@ -518,7 +517,7 @@ int main(int argc, char** argv) {
     Coefficients coef(10);
     coef.calcCoefficients();
  
-    Solver solver((M - 1) * (N - 1), 1e-20, 1e-40);
+    Solver solver((M - 1) * (N - 1), 1e-8);
     solver.solve(coef);
 
     if (mpi_rank == 0) {
