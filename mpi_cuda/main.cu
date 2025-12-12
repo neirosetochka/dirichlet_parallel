@@ -388,14 +388,13 @@ struct SolverGPU {
     int max_steps;
     int steps;
     double delta;
-    double divide_eps;
  
     double* d_partial;
     double* d_partial_temp; 
     double* h_partial;
  
-    SolverGPU(int max_steps_val, double delta_val, double divide_eps_val = 1e-10) : 
-        max_steps(max_steps_val), delta(delta_val), divide_eps(divide_eps_val),
+    SolverGPU(int max_steps_val, double delta_val) : 
+        max_steps(max_steps_val), delta(delta_val),
         w(local_M, local_N), p(local_M, local_N), r(local_M, local_N), z(local_M, local_N) {
         int n_elements = local_M * local_N;
         timer.start("GPU Memory Management");
@@ -419,7 +418,7 @@ struct SolverGPU {
  
         timer.start("calcZ cycle");
         timer.start("GPU Kernels");
-        kernel_calcZ<<<gridDim, blockDim>>>(r.d_data, coef.D.d_data, z.d_data, local_M, local_N, divide_eps);
+        kernel_calcZ<<<gridDim, blockDim>>>(r.d_data, coef.D.d_data, z.d_data, local_M, local_N);
         CUDA_CHECK(cudaDeviceSynchronize());
         timer.stop("GPU Kernels");
         timer.stop("calcZ cycle");
@@ -437,24 +436,24 @@ struct SolverGPU {
  
         double zr_scalar_prod = calcScalarProdGPU(z, r, d_partial, d_partial_temp, h_partial);
         double zr_scalar_prod_prev = zr_scalar_prod;
-        double alpha = zr_scalar_prod / (calcScalarProdGPU(Ap, p, d_partial, d_partial_temp, h_partial) + divide_eps);
+        double alpha = zr_scalar_prod / calcScalarProdGPU(Ap, p, d_partial, d_partial_temp, h_partial);
  
         int k;
         for (k = 1; k < max_steps; k++) {
             calcScaledAddGPU(w, p, alpha, w);
             calcScaledAddGPU(r, Ap, -alpha, r);
-            double norm = fabs(alpha) * sqrt(calcScalarProdGPU(p, p, d_partial, d_partial_temp, h_partial));
+            double norm = sqrt(calcScalarProdGPU(r, r, d_partial, d_partial_temp, h_partial));
             if (norm < delta) {
                 steps = k;
                 break;
             }
             calcZ(coef);
             zr_scalar_prod = calcScalarProdGPU(z, r, d_partial, d_partial_temp, h_partial);
-            double beta = zr_scalar_prod / (zr_scalar_prod_prev + divide_eps);
+            double beta = zr_scalar_prod / zr_scalar_prod_prev;
             zr_scalar_prod_prev = zr_scalar_prod;
             calcScaledAddGPU(z, p, beta, p);
             coef.applyA(p, Ap);
-            alpha = zr_scalar_prod / (calcScalarProdGPU(Ap, p, d_partial, d_partial_temp, h_partial) + divide_eps);
+            alpha = zr_scalar_prod / calcScalarProdGPU(Ap, p, d_partial, d_partial_temp, h_partial);
             if (k == max_steps - 1) {
                 steps = max_steps;
             }
@@ -487,6 +486,87 @@ struct SolverGPU {
 };
 
 
+void save_solution_to_file(SolverGPU& solver, const char* filename) {
+    vector<double> local_data;
+    solver.w.copyToHost(local_data);
+    
+    vector<double> send_buffer(local_M * local_N);
+    for (int i = 0; i < local_M; i++) {
+        for (int j = 0; j < local_N; j++) {
+            int idx = (i + 1) * (local_N + 2) + (j + 1);
+            send_buffer[i * local_N + j] = local_data[idx];
+        }
+    }
+    
+    if (mpi_rank == 0) {
+        vector<double> global_solution((M + 1) * (N + 1), 0.0);
+        
+        for (int i = 0; i < local_M; i++) {
+            for (int j = 0; j < local_N; j++) {
+                int gi = i_start + i;
+                int gj = j_start + j;
+                global_solution[gi * (N + 1) + gj] = send_buffer[i * local_N + j];
+            }
+        }
+
+        for (int rank = 1; rank < mpi_size; rank++) {
+            int recv_coords[2];
+            MPI_Cart_coords(cart_comm, rank, 2, recv_coords);
+            
+            int recv_i_start, recv_local_M;
+            int base_i = (M + 1) / px;
+            int rem_i = (M + 1) % px;
+            if (recv_coords[0] < rem_i) {
+                recv_local_M = base_i + 1;
+                recv_i_start = recv_coords[0] * (base_i + 1);
+            } else {
+                recv_local_M = base_i;
+                recv_i_start = rem_i * (base_i + 1) + (recv_coords[0] - rem_i) * base_i;
+            }
+            
+            int recv_j_start, recv_local_N;
+            int base_j = (N + 1) / py;
+            int rem_j = (N + 1) % py;
+            if (recv_coords[1] < rem_j) {
+                recv_local_N = base_j + 1;
+                recv_j_start = recv_coords[1] * (base_j + 1);
+            } else {
+                recv_local_N = base_j;
+                recv_j_start = rem_j * (base_j + 1) + (recv_coords[1] - rem_j) * base_j;
+            }
+            
+            vector<double> recv_buffer(recv_local_M * recv_local_N);
+            MPI_Recv(recv_buffer.data(), recv_local_M * recv_local_N, MPI_DOUBLE, 
+                     rank, 0, cart_comm, MPI_STATUS_IGNORE);
+
+            for (int i = 0; i < recv_local_M; i++) {
+                for (int j = 0; j < recv_local_N; j++) {
+                    int gi = recv_i_start + i;
+                    int gj = recv_j_start + j;
+                    global_solution[gi * (N + 1) + gj] = recv_buffer[i * recv_local_N + j];
+                }
+            }
+        }
+        
+        FILE* f = fopen(filename, "wb");
+        if (f) {
+            int dims[2] = {M + 1, N + 1};
+            fwrite(dims, sizeof(int), 2, f);
+            fwrite(global_solution.data(), sizeof(double), (M + 1) * (N + 1), f);
+            fclose(f);
+            cout << "Solution saved to " << filename << endl;
+            cout << "Grid dimensions: " << M + 1 << " x " << N + 1 << endl;
+        } else {
+            cerr << "Error: Could not open file " << filename << endl;
+        }
+    } else {
+        MPI_Send(send_buffer.data(), local_M * local_N, MPI_DOUBLE, 
+                 0, 0, cart_comm);
+    }
+}
+
+
+
 int main(int argc, char** argv) {
     MPI_Init(&argc, &argv);
     MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank);
@@ -515,11 +595,12 @@ int main(int argc, char** argv) {
     CoefficientsGPU coef(10);
     coef.calcCoefficients();
  
-    SolverGPU solver((M - 1) * (N - 1), 1e-20, 1e-40);
+    SolverGPU solver((M - 1) * (N - 1), 1e-8);
     solver.solve(coef);
 
     timer.stop("Total time");
-    
+    save_solution_to_file(solver, "solution.bin");
+
     if (mpi_rank == 0) {
         cout << "Iteration number: " << solver.steps << endl;
         cout << "MPI processes: " << mpi_size << endl;

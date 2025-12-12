@@ -41,7 +41,7 @@ __global__ void kernel_copy(double* d_src, double* d_dst, int ni, int nj);
  
 __global__ void kernel_scalar_prod(double* d_u, double* d_v, double* d_partial, int ni, int nj, double h1_val, double h2_val);
  
-__global__ void kernel_calcZ(double* d_r, double* d_D, double* d_z, int ni, int nj, double divide_eps);
+__global__ void kernel_calcZ(double* d_r, double* d_D, double* d_z, int ni, int nj);
  
 __global__ void kernel_extract_north(double* d_u, double* d_send, int nj);
  

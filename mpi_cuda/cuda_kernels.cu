@@ -189,14 +189,14 @@ __global__ void kernel_scalar_prod(double* d_u, double* d_v, double* d_partial, 
     d_partial[linear_idx] = d_u[idx] * d_v[idx] * h1_val * h2_val;
 }
  
-__global__ void kernel_calcZ(double* d_r, double* d_D, double* d_z, int ni, int nj, double divide_eps) {
+__global__ void kernel_calcZ(double* d_r, double* d_D, double* d_z, int ni, int nj) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     int j = blockIdx.y * blockDim.y + threadIdx.y;
  
     if (i >= ni || j >= nj) return;
  
     int idx = (i + 1) * (nj + 2) + (j + 1);
-    d_z[idx] = d_r[idx] / (d_D[idx] + divide_eps);
+    d_z[idx] = d_r[idx] / d_D[idx];
 }
  
 __global__ void kernel_extract_north(double* d_u, double* d_send, int nj) {
